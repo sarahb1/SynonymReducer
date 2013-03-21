@@ -1,0 +1,374 @@
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.PrintStream;
+import java.io.Reader;
+import java.io.StringReader;
+import java.io.UnsupportedEncodingException;
+import java.net.URI;
+import java.net.URL;
+import java.nio.charset.Charset;
+import java.security.InvalidKeyException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.TimeZone;
+import java.util.zip.GZIPInputStream;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import javax.mail.BodyPart;
+import javax.mail.MessagingException;
+import javax.mail.internet.MimeMultipart;
+import javax.mail.util.ByteArrayDataSource;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.apache.commons.codec.binary.Base64;
+import org.apache.commons.io.IOUtils;
+import org.apache.http.Header;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.protocol.RequestAcceptEncoding;
+import org.apache.http.client.protocol.ResponseContentEncoding;
+import org.apache.http.client.utils.URLEncodedUtils;
+import org.apache.http.entity.BufferedHttpEntity;
+import org.apache.http.entity.mime.FormBodyPart;
+import org.apache.http.entity.mime.MultipartEntity;
+import org.apache.http.entity.mime.content.ContentBody;
+import org.apache.http.entity.mime.content.StringBody;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.message.BasicNameValuePair;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.jsoup.Connection;
+import org.jsoup.Jsoup;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+
+public class DisambiguateMpxml
+{
+  private static String inputText = "The truth is, money is correlated to happiness, particularly for low- and middle-income earners. Research from Princeton University shows that as test subjects increased their incomes, their overall life outlook improved as well. Regardless of economic class, jumps in salary and happiness increased at the same rate, meaning that a 20 increase in salary resulted in the same amount of overall happiness for both low-income and high-income people.";
+  private static String inputType = "file";
+  private static ArrayList<String> senseKeys;
+  
+  public static void main(String[] args) throws IOException, MessagingException, SAXException, UnsupportedEncodingException
+  {
+    if ((args.length > 0) && (args[0] != null) && (!args[0].equals(""))) {
+      inputType = checkArgs(args[0]);
+      if (inputType.equals("url")) {
+        inputText = readPageText(args[0]);
+      }
+      else if (inputType.equals("file")) {
+        FileInputStream inputStream = new FileInputStream(args[0]);
+        try {
+          inputText = IOUtils.toString(inputStream);
+        } finally {
+          inputStream.close();
+        } 
+      }
+      else {
+        inputText = args[0];
+      } 
+    } 
+    
+    senseKeys = new ArrayList();
+    reduced = new ArrayList();
+    
+    MultipartEntity xmitEntity = new MultipartEntity();
+    
+
+    Object parms = new ArrayList();
+    ((List)parms).add(new BasicNameValuePair("requestId", "test"));
+    ((List)parms).add(new BasicNameValuePair("resultMime", "application/x-semdoc+xml+gz"));
+    String parmsText = URLEncodedUtils.format((List)parms, "UTF-8");
+    xmitEntity.addPart("parms", new StringBody(parmsText, "application/x-www-form-urlencoded", Charset.forName(new String("UTF-8"))));
+    
+
+
+    ContentBody docBody = new StringBody(inputText, "text/plain", Charset.forName(new String("UTF-8")));
+    FormBodyPart docPart = new FormBodyPart("text", docBody);
+    xmitEntity.addPart(docPart);
+    
+
+    DefaultHttpClient httpclient = new DefaultHttpClient();
+    httpclient.addRequestInterceptor(new RequestAcceptEncoding());
+    httpclient.addResponseInterceptor(new ResponseContentEncoding());
+    HttpPost httpPost = new HttpPost(serviceUrl);
+    httpPost.setEntity(xmitEntity);
+    
+
+    sign(httpPost, serviceUrl, docPart);
+    HttpResponse httpResponse = httpclient.execute(httpPost);
+    
+
+    HttpEntity rxEntity = httpResponse.getEntity();
+    if (rxEntity == null) {
+      throw new RuntimeException("Did not received a response from the server");
+    } 
+    BufferedHttpEntity bRxEntity = new BufferedHttpEntity(rxEntity);
+    String ct = bRxEntity.getContentType().getValue();
+    if (ct.contains("multipart/mixed"))
+    {
+
+
+
+
+      ByteArrayOutputStream inOs = new ByteArrayOutputStream((int)bRxEntity.getContentLength());
+      bRxEntity.writeTo(inOs);
+      ByteArrayDataSource ds = new ByteArrayDataSource(inOs.toByteArray(), bRxEntity.getContentType().getValue());
+      MimeMultipart mmp = new MimeMultipart(ds);
+      
+
+
+      org.w3c.dom.Document resp = docBuilder.parse(new InputSource(mmp.getBodyPart(0).getInputStream()));
+      Integer status = new Integer(resp.getElementsByTagName("status").item(0).getFirstChild().getNodeValue());
+      String errorMsg = new String();String requestId = new String();
+      NodeList nl = resp.getElementsByTagName("errorMsg");
+      if (nl.getLength() > 0)
+        errorMsg = nl.item(0).getFirstChild().getNodeValue(); 
+      nl = resp.getElementsByTagName("requestId");
+      if (nl.getLength() > 0)
+        requestId = nl.item(0).getFirstChild().getNodeValue(); 
+      if (status.intValue() != 200) {
+        System.err.println("Got code: " + status.toString() + " with error: " + errorMsg + " when processing request: " + requestId);
+        return;
+      } 
+      
+
+
+      if ((mmp.getCount() == 2) && (mmp.getBodyPart(1).getContentType().contains("x-semdoc+xml")))
+      {
+        org.w3c.dom.Document semdoc = recoverSemdoc(mmp.getBodyPart(1));
+        
+
+
+        NodeList fss = semdoc.getElementsByTagName("fs");
+        for (int fsIdx = 0; fsIdx < fss.getLength(); fsIdx++) {
+          Element fs = (Element)fss.item(fsIdx);
+          String sk = fs.getAttribute("sk");
+          senseKeys.add(sk);
+          String sksk = getParentFromSenseKey(sk);
+          if (sksk.contains("/")) {
+            int end = sksk.indexOf('/');
+            sksk = sksk.substring(0, end);
+            reduced.add(sksk);
+          } 
+        } 
+        
+        System.out.println(reduced.toString());
+        return;
+      } 
+    } 
+    
+
+    ByteArrayOutputStream errorOutStream = new ByteArrayOutputStream();
+    bRxEntity.writeTo(errorOutStream);
+    String strError = new String(errorOutStream.toByteArray(), "ISO-8859-1");
+    throw new RuntimeException(strError);
+  } 
+  
+
+  private static ArrayList<String> reduced;
+  private static final String accessKey = "[InsertPublicKeyHere]";
+  static org.w3c.dom.Document recoverSemdoc(BodyPart bp)
+    throws MessagingException, IOException, SAXException
+  {
+    String[] encodings = bp.getHeader("Content-Encoding");
+    boolean isZipped = (encodings != null) && (encodings.length == 1) && (encodings[0].contentEquals("gzip"));
+    InputStream is = isZipped ? new GZIPInputStream(bp.getInputStream()) : bp.getInputStream();
+    
+    ByteArrayOutputStream os = new ByteArrayOutputStream((isZipped ? 3 : 1) * bp.getSize());
+    byte[] buf = new byte['䀀'];
+    int len;
+    while ((len = is.read(buf)) > 0) { int len;
+      os.write(buf, 0, len);
+    } 
+    
+    is.close();
+    os.close();
+    
+
+    InputSource src = new InputSource(new StringReader(os.toString()));
+    return docBuilder.parse(src);
+  } 
+  
+
+
+  static void sign(HttpPost post, URI uri, FormBodyPart docPart)
+    throws IOException
+  {
+    String host = uri.getHost();
+    post.setHeader("Host", host);
+    
+
+    Date now = new Date();
+    DateFormat dateFmt = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z");
+    dateFmt.setTimeZone(TimeZone.getTimeZone("GMT"));
+    String dateS = dateFmt.format(now);
+    post.setHeader("Date", dateS);
+    
+    String toSign = dateS + "-" + host + "-" + uri.getPath();
+    
+    if (docPart.getBody().getContentLength() > 0L) {
+      ByteArrayOutputStream signOs = new ByteArrayOutputStream();
+      docPart.getBody().writeTo(signOs);
+      
+      try
+      {
+        MessageDigest md = MessageDigest.getInstance("MD5");
+        byte[] theDigest = md.digest(signOs.toByteArray());
+        byte[] base64md5 = Base64.encodeBase64(theDigest);
+        String strDigest = new String(base64md5);
+        toSign = toSign + "-";
+        toSign = toSign + strDigest;
+      } catch (NoSuchAlgorithmException e) {
+        e.printStackTrace();
+      } 
+    } 
+    
+
+    SecretKeySpec signingKey = new SecretKeySpec("[InsertPublicKeyHere]".getBytes(), "HmacSHA256");
+    try {
+      Mac mac = Mac.getInstance("HmacSHA256");
+      mac.init(signingKey);
+      byte[] rawHmac = mac.doFinal(toSign.getBytes());
+      byte[] signature = Base64.encodeBase64(rawHmac);
+      post.setHeader("Authorization", "IDILIA [InsertPublicKeyHere]:" + new String(signature));
+    } catch (NoSuchAlgorithmException e) {
+      e.printStackTrace();
+    } catch (InvalidKeyException e) {
+      e.printStackTrace();
+    } 
+  } 
+  
+
+
+  private static final String privateKey = "[InsertPrivateKeyHere]";
+  
+  private static final String HMAC_SHA_ALGORITHM = "HmacSHA256";
+  
+  private static URI serviceUrl;
+  
+  private static DocumentBuilder docBuilder;
+  
+  static
+  {
+    if (("[InsertPublicKeyHere]" == null) || ("[InsertPrivateKeyHere]" == null) || ("[InsertPublicKeyHere]".length() == 0) || ("[InsertPrivateKeyHere]".length() == 0)) {
+      throw new RuntimeException("You have to set the access and private keys");
+    } 
+    
+    try
+    {
+      serviceUrl = new URI("http://api.idilia.com/1/text/disambiguate.mpxml");
+      docBuilder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
+    } catch (Exception e) {
+      e.printStackTrace();
+    } 
+  } 
+  
+  public static String checkArgs(String args) {
+    String[] urlTypes = { "http", "https", "ftp", "ftps", ".com", ".net", ".edu", ".info" };
+    for (int i = 0; i < urlTypes.length; i++) {
+      if (args.contains(urlTypes[i])) {
+        return "url";
+      } 
+    } 
+    if (args.contains(".txt")) {
+      return "file";
+    } 
+    
+    return "snippet";
+  } 
+  
+
+  public static String readPageText(String pageUrl)
+  {
+    org.jsoup.nodes.Document doc = null;
+    try {
+      doc = Jsoup.connect(pageUrl).get();
+    }
+    catch (IOException e) {
+      e.printStackTrace();
+    } 
+    return doc.text();
+  } 
+  
+  public static String getParentFromSenseKey(String key)
+  {
+    JSONObject json = null;
+    try {
+      json = readJsonFromUrl("http://api.idilia.com/1/kb/query.json?key=[InsertSecretKeyHere]&query=[{\"fsk\":\"" + 
+        key + "\",\"parents\":[]}]");
+      if (json == null) { return key;
+      } 
+
+    }
+    catch (IOException localIOException) {}catch (JSONException e)
+    {
+
+      System.out.println("catch statement2");
+      
+      e.printStackTrace();
+    } 
+    
+    String child = null;
+    try {
+      if (json == null) return key; 
+      child = json.getJSONArray("result").get(0).toString();
+    } catch (JSONException e) {
+      System.out.println("catch statement3");
+      
+
+      e.printStackTrace();
+    } 
+    
+    String result = getParentString(child);
+    if (result == null) {
+      return key;
+    } 
+    
+    return result;
+  } 
+  
+  public static String getParentString(String s)
+  {
+    int begin = s.indexOf('[');
+    int end = s.indexOf(']');
+    if (end - begin == 1) return null; 
+    begin += 2;
+    end--;
+    return s.substring(begin, end);
+  } 
+  
+  private static String readAll(Reader rd) throws IOException {
+    StringBuilder sb = new StringBuilder();
+    int cp;
+    while ((cp = rd.read()) != -1) { int cp;
+      sb.append((char)cp);
+    } 
+    return sb.toString();
+  } 
+  
+  public static JSONObject readJsonFromUrl(String url) throws IOException, JSONException {
+    InputStream is = new URL(url).openStream();
+    try {
+      BufferedReader rd = new BufferedReader(new InputStreamReader(is, Charset.forName("UTF-8")));
+      String jsonText = readAll(rd);
+      JSONObject json = new JSONObject(jsonText);
+      return json;
+    } finally {
+      is.close();
+    } 
+  } 
+} 
